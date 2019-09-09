@@ -1,0 +1,148 @@
+---
+# Variable setup.
+- name: Include OS-specific variables.
+  include_vars: "{{ ansible_os_family }}.yml"
+
+- name: Define redis_package.
+  set_fact:
+    redis_package: "{{ __redis_package }}"
+  when: redis_package is not defined
+
+# Setup/install tasks.
+- include_tasks: setup-RedHat.yml
+  when: ansible_os_family == 'RedHat'
+
+- include_tasks: setup-Debian.yml
+  when: ansible_os_family == 'Debian'
+
+- include_tasks: setup-Archlinux.yml
+  when: ansible_os_family == 'Archlinux'
+
+- name: Ensure Redis is configured.
+  template:
+    src: redis.conf.j2
+    dest: "{{ redis_conf_path }}"
+    mode: 0644
+  notify: restart redis
+
+- name: Ensure Redis is running and enabled on boot.
+  service: "name={{ redis_daemon }} state=started enabled=yes"
+ 
+#install docker   
+- name: Install yum utils
+  yum:
+    name: yum-utils
+    state: latest
+
+- name: Install device-mapper-persistent-data
+  yum:
+    name: device-mapper-persistent-data
+    state: latest
+
+- name: Install lvm2
+  yum:
+    name: lvm2
+    state: latest
+
+- name: Add Docker repo
+  get_url:
+    url: https://download.docker.com/linux/centos/docker-ce.repo
+    dest: /etc/yum.repos.d/docker-ce.repo
+  become: yes
+
+- name: Install Docker
+  package:
+    name: docker-ce
+    state: latest
+  become: yes
+
+- name: Start Docker service
+  service:
+    name: docker
+    state: started
+    enabled: yes
+  become: yes
+
+- name: install epel-release
+  yum:
+    name: epel-release
+    state: latest
+
+- name: install pip
+  yum:
+    name: python-pip
+    state: latest
+
+- name: install python docker sdk
+  pip:
+    name: docker
+
+#pull redis and build redis container
+- name: pull an image
+  docker_image:
+    name: redis
+    source: pull
+
+- name: Create redis container
+  docker_container:
+    name: redis
+    image: redis
+
+#pull dynomite and build dynomite db
+- name: pull dynomite image
+  docker_image:
+    name: yerdaulet99/dynomiteyer
+    source: pull
+
+- name: Create dynomite container
+  docker_container:
+    name: dynomitedb
+    image: yerdaulet99/dynomiteyer
+
+- name: Finer container restart/update control redis
+  docker_container:
+    name: redis
+    image: redis
+    env:
+      arg1: "/opt/redis.conf"
+      arg2: "whatever"
+    volumes:
+      - /var/lib/redis:/var/lib/redis
+      - /opt/redis.conf:/etc/redis.conf
+
+- name: Finer container restart/update control dynomite
+  docker_container:
+    name: dynomitedb
+    image: yerdaulet99/dynomiteyer
+    env:
+      arg1: "/opt/redis.conf"
+      arg2: "whatever"
+    volumes:
+      - /var/lib/redis:/var/lib/redis
+      - /opt/dynomite.yaml:/etc/dynomite.yml
+
+- name: Create a network
+  docker_network:
+    name: dynoredis
+    ipam_config:
+      - subnet: 172.3.27.0/24
+        gateway: 172.3.27.2
+        iprange: 172.3.27.0/26
+        aux_addresses:
+          host1: 172.3.27.3
+          host2: 172.3.27.4
+
+- name: Add redis container to network
+  docker_network:
+    name: dynoredis
+    connected:
+      - redis
+    appends: yes
+
+- name: Add dynomite db to network
+  docker_network:
+    name: dynoredis
+    connected:
+      - dynomitedb
+    appends: yes  
+

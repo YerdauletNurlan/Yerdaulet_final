@@ -1,0 +1,4 @@
+[centos]
+192.167.100.13
+[centos:vars]
+ansible_user=vagrant
